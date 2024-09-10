@@ -5,6 +5,7 @@ from court_reference import CourtReference
 from bounce_detector import BounceDetector
 from person_detector import PersonDetector
 from ball_detector import BallDetector
+from shot_rating import extract_data, calculate_shot_quality, classify_shot_type
 from utils import scene_detect
 import argparse
 import torch
@@ -55,6 +56,10 @@ def main(frames, scenes, bounces, ball_track, homography_matrices, kps_court, pe
     width_minimap = 166
     height_minimap = 350
     is_track = [x is not None for x in homography_matrices]
+
+    previous_shot = None
+    fps = 60
+
     for num_scene in range(len(scenes)):
         sum_track = sum(is_track[scenes[num_scene][0]:scenes[num_scene][1]])
         len_track = scenes[num_scene][1] - scenes[num_scene][0]
@@ -66,6 +71,7 @@ def main(frames, scenes, bounces, ball_track, homography_matrices, kps_court, pe
 
             for i in range(scenes[num_scene][0], scenes[num_scene][1]):
                 img_res = frames[i]
+                height, width, _ = img_res.shape
                 inv_mat = homography_matrices[i]
 
                 # draw ball trajectory
@@ -88,13 +94,40 @@ def main(frames, scenes, bounces, ball_track, homography_matrices, kps_court, pe
                               thickness=2,
                               color=(0, 255, 0))
 
+
+                # Extract data for shot rating
+                ball_speed, ball_spin, ball_depth, ball_width, player_position, shot_type, _ = extract_data(
+                    i, ball_track, homography_matrices, persons_top, persons_bottom, bounces, fps, previous_shot
+                )
+
+                shot_quality = calculate_shot_quality(ball_speed, ball_spin, ball_depth, ball_width, shot_type, previous_shot)
+                shot_classification = classify_shot_type(shot_quality, player_position, ball_speed, ball_spin, ball_depth)
+
+                previous_shot = {
+                    'quality': shot_quality,
+                    'type': shot_type,
+                    'classification': shot_classification,
+                    'speed': ball_speed,
+                    'spin': ball_spin,
+                    'depth': ball_depth,
+                    'width': ball_width,
+                    'player_position': player_position
+                }
+
+                # Display shot rating on the frame
+                img_res = cv2.putText(img_res, f'Shot Quality: {shot_quality:.2f} ({shot_classification})',
+                                      org=(10, height - 10),
+                                      fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                      fontScale=0.8,
+                                      thickness=2,
+                                      color=(255, 255, 255))
+
                 # draw court keypoints
                 if kps_court[i] is not None:
                     for j in range(len(kps_court[i])):
                         img_res = cv2.circle(img_res, (int(kps_court[i][j][0, 0]), int(kps_court[i][j][0, 1])),
                                           radius=0, color=(0, 0, 255), thickness=10)
 
-                height, width, _ = img_res.shape
 
                 # draw bounce in minimap
                 if i in bounces and inv_mat is not None:
